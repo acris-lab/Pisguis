@@ -1,92 +1,43 @@
 # Pisguis
 
-Pisguis 是面向 AstrBot 4.29.x 的单插件聊天增强包，集中提供命令权限、提示词组装、群聊接话、回复分段和群聊/私聊记忆。
+Pisguis 是面向 AstrBot 4.29.x 的单插件聊天增强包，集权限控制、提示词、群聊接话、回复格式和记忆于一体。
 
-## 安装
+## 使用
 
-仓库根目录就是完整的单插件，可直接在 AstrBot WebUI 中通过 GitHub 仓库一键安装或更新：
+在 AstrBot WebUI 中通过 GitHub 仓库一键安装：
 
 ```text
 https://github.com/acris-lab/Pisguis
 ```
 
-也可以把仓库根目录复制为 `AstrBot/data/plugins/astrbot_plugin_pisguis/`，然后重启 AstrBot。
+安装后重启 AstrBot。主人列表为空时，第一个私聊机器人的人会自动成为主人。
 
-首次启动会自动创建：
+插件数据统一保存在：
 
 ```text
 data/plugin_data/astrbot_plugin_pisguis/
-├── access_config.json
-├── addressee_config.json
-├── chat_style_config.json
-├── memory_config.json
-├── chat_rules.md
-├── prompt/
-├── prompts/
-├── cmd_list/
-└── mem_archive/
 ```
 
-从旧五插件版本升级时，Pisguis 只会复制缺失数据，不会覆盖现有文件。安装单插件后应移除旧的五个 `astrbot_plugin_pisguis_*` 插件目录，避免重复响应。
+配置、提示词、命令表和记忆会在首次运行时自动创建。权限、群聊接话、回复样式和记忆均可独立开关；基础设置模块始终开启，避免管理命令一起失效。
 
-## 首次使用
+## 功能
 
-主人列表为空时，第一个私聊机器人的人会自动成为主人。主人可在私聊或群聊中管理二级管理员：
+**权限控制**：拦截半角 `/` 开头的命令，只允许主人和二级管理员执行；普通用户发送的命令会作为聊天内容处理。非主人同时无法使用 Agent 工具。
+
+**提示词与基础设置**：提供人格模式、上下文预算、思考开关和场景提示，并把规则、身份、人格与记忆组装成当前会话的系统提示词。
+
+**群聊接话**：群消息按概率决定是否回应；被 @、@全体或回复机器人后，会进入一段持续接话时间，避免在群里频繁插话。
+
+**回复格式**：清理残留的工具调用、重复句和括号独白，按聊天或长文自动分段，并加入自然的发送间隔。关闭后会原样发送模型结果。
+
+**两层记忆**：私聊按用户记忆，群聊按群记忆。最近对话先整理成“页”，多次页整理后再合并成“本”，后续对话会按相关度带少量记忆。群聊整理会保留发言人身份，关闭记忆不会删除已有内容。
+
+## 命令入口
+
+发送下面的命令查看当前所有可用命令和开关：
 
 ```text
-/guard
-/guard on|off
-/guard add <QQ>
-/guard remove <QQ>
-/guard list
-```
-
-## 命令
-
-```text
-# common：始终开启
-/config
-/config mode [名字]
-/config ctx 2-32
-/config think on|off
-/prompt
 /cmd
-
-# guard：权限、工具限制和会话身份
-/guard
-/guard on|off
-
-# group：群聊自动接话
-/group
-/group on|off
-
-# style：清洗、分段和拟人延迟
-/style
-/style on|off
-/style delay 0-10
-
-# mem：群聊/私聊两层记忆
-/mem
-/mem on|off
-/mem show
-/mem clear
-/mem page 0-100
-/mem book 3-5
-/mem pagecap 1-20
-/mem bookcap 1-50
-/mem gen
 ```
 
-`guard`、`group`、`style`、`mem` 的开关立即生效并保存到各自的 `plugin_data` 配置文件，重启后保持。关闭 `mem` 只会停止新消息收集、整理和注入，已有记忆不会删除。`common` 不提供关闭命令，避免 `/config`、`/prompt` 和 `/cmd` 一并失效。
-
-只有半角 `/` 开头的命令会进入权限检查。未知命令、无权限命令和纯字符串命令都按普通聊天处理。
-
-## 开发
-
-入口为 `main.py`，业务模块位于 `pisguis/`。运行静态编译检查：
-
-```powershell
-python -m compileall -q main.py pisguis
-```
-
-发布前至少验证单插件加载、命令鉴权、空数据初始化、旧数据迁移、群聊隔离记忆和分段发送。
+只有半角 `/` 开头的消息会被识别为命令。未知命令、无权限命令和纯字符串命令都按普通聊天处理。
