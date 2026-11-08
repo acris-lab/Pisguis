@@ -135,7 +135,7 @@ class GroupReply:
             os.makedirs(d, exist_ok=True)
             lines = [
                 "/group                群聊接话状态",
-                "/group on|off         开关自动接话",
+                "/group on|off         自动接话 / 仅回应 @",
                 "/group prob 0.1-1.0   设置接话概率",
                 "/group window 10-60   设置热点持续秒数",
             ]
@@ -207,8 +207,7 @@ class GroupReply:
         if req is None:
             return
         cfg = self._cfg()
-        if not cfg.get("enabled", True):
-            return
+        enabled = bool(cfg.get("enabled", True))
 
         umo = str(event.unified_msg_origin)
         if not self._group_ok(umo, cfg):
@@ -223,8 +222,19 @@ class GroupReply:
         win = float(cfg.get("window_seconds", 20))
 
         if self._addressed(event):
-            self._set_focus(umo, uid, win)
-            logger.info(f"group_reply: {uid} @/回复了我 → 全接 {win:.0f}s")
+            if enabled:
+                self._set_focus(umo, uid, win)
+                logger.info(f"group_reply: {uid} @/回复了我 → 全接 {win:.0f}s")
+            else:
+                logger.info(f"group_reply: {uid} @/回复了我 → 仅本次回复")
+            return
+
+        if not enabled:
+            logger.info(f"group_reply: {uid} 非 @/回复消息，仅回应模式跳过")
+            try:
+                event.stop_event()
+            except Exception:
+                pass
             return
 
         if self._is_focus(umo, uid):
@@ -255,8 +265,12 @@ class GroupReply:
         if arg in ("on", "off", "开", "关"):
             enabled = arg in ("on", "开")
             self._save_setting("enabled", enabled)
+            if not enabled:
+                self._focus.clear()
             yield event.plain_result(
-                "✅ 群聊接话已开启" if enabled else "已关闭群聊接话"
+                "✅ 自动接话已开启"
+                if enabled
+                else "已切换为仅回应 @/回复，热点已关闭"
             )
             return
 
@@ -304,7 +318,7 @@ class GroupReply:
 
         enabled = bool(cfg.get("enabled", True))
         yield event.plain_result(
-            f"群聊接话：{'开' if enabled else '关'}\n"
+            f"接话模式：{'自动接话' if enabled else '仅回应 @/回复'}\n"
             f"基础概率：{float(cfg.get('probability', 0.15)):.2f}\n"
             f"热点持续：{float(cfg.get('window_seconds', 20)):.0f} 秒\n"
             "用法：/group on|off、prob、window"

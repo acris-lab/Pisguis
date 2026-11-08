@@ -2,7 +2,7 @@ name: astrbot_plugin_pisguis
 display_name: Pisguis
 desc: 命令权限、提示词、群聊接话、回复格式化与群聊/私聊两层记忆
 short_desc: AstrBot 聊天增强合集
-version: v1.1.1
+version: v1.2.0
 author: acris-lab
 repo: https://github.com/acris-lab/Pisguis
 astrbot_version: ">=4.29.0,<5"

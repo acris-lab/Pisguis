@@ -6,7 +6,7 @@
 - 分片目录最多留 archive_keep 个（默认 10），超了删最早的
 
 三层语义：
-- 页：当前一页（可增删改）→ 每 book_pages 次页整理，本吸一次，页冻结翻新
+- 页：当前一页（可增删改）→ 每 3 次页整理，本吸一次，页冻结翻新
 - 本：当前小本本（可改）→ 每次页整理都尝试合入
 """
 
@@ -33,17 +33,17 @@ from .paths import astrbot_data_root, data_path
 
 # ---------------- 配置 ----------------
 DEFAULT_CFG = {
-    "config_version": 2,
+    "config_version": 3,
     "enabled": True,
     "group_memory": True,
     # 每页多少轮（1 轮 = 1 问 1 答）；0 = 关掉自动分页，只在 /mem gen 时整理
     "page_turns": 20,
-    "book_pages": 3,          # 3-5 次页整理 → 一次本整理
+    "book_pages": 3,          # 固定 3 次页整理 → 一次本整理
     "idle_seconds": 1800,     # 空闲兜底：这么久没新消息
     "idle_min_turns": 10,     # 且攒了这么多轮 → 提前整理
     "keep_pages": 2,          # 页/本各留 2 格（当前 + 冻结）
     # 群聊按群独立记录；私聊按用户独立记录
-    "max_items": {"hour": 20, "day": 50},
+    "max_items": {"hour": 20, "day": 30},
     # importance 名额：None=不限，数字=该档最多几条；没列出的档位只当补位
     "importance_quota": {
         "hour": {"5": None, "4": 12, "3": 8},
@@ -288,28 +288,23 @@ def _normalize_config_file(path: str) -> None:
         data = {}
     if not isinstance(data, dict):
         data = {}
-    old_version = _clamp_int(data.get("config_version"), 1, 1, 2)
+    old_version = _clamp_int(data.get("config_version"), 1, 1, 3)
     data.setdefault("enabled", True)
     data.setdefault("group_memory", True)
     data.setdefault("page_turns", 20)
-    data["book_pages"] = _clamp_int(data.get("book_pages"), 3, 3, 5)
+    data["book_pages"] = 3
     data["keep_pages"] = 2
     if old_version < 2:
-        data["max_items"] = {"hour": 20, "day": 50}
+        data["max_items"] = {"hour": 20, "day": 30}
         data["importance_quota"] = copy.deepcopy(DEFAULT_CFG["importance_quota"])
         data["min_importance"] = copy.deepcopy(DEFAULT_CFG["min_importance"])
         data["inject"] = copy.deepcopy(DEFAULT_CFG["inject"])
     else:
-        caps = data.get("max_items")
-        if not isinstance(caps, dict):
-            caps = {}
-        caps["hour"] = _clamp_int(caps.get("hour"), 20, 1, 20)
-        caps["day"] = _clamp_int(caps.get("day"), 50, 1, 50)
-        data["max_items"] = caps
+        data["max_items"] = {"hour": 20, "day": 30}
         data.setdefault("importance_quota", copy.deepcopy(DEFAULT_CFG["importance_quota"]))
         data.setdefault("min_importance", copy.deepcopy(DEFAULT_CFG["min_importance"]))
         data.setdefault("inject", copy.deepcopy(DEFAULT_CFG["inject"]))
-    data["config_version"] = 2
+    data["config_version"] = 3
     data.pop("profile_books", None)
     data.pop("profile_cap", None)
     tmp = path + ".tmp"
@@ -694,10 +689,7 @@ class MemV4:
                 "/mem on|off         开关记忆收集与注入",
                 "/mem show           看会注入的记忆",
                 "/mem clear          清空当前私聊/群聊记忆",
-                "/mem page 0-100     多少轮触发一次整理",
-                "/mem book 3-5       几次页整理进入本",
-                "/mem pagecap 1-20   设置页容量",
-                "/mem bookcap 1-50   设置本容量",
+                "/mem page 10-50     多少轮触发一次整理",
                 "/mem gen            立刻整理待整理的对话",
             ]
             with open(os.path.join(d, "memory.txt"), "w", encoding="utf-8") as f:
@@ -733,15 +725,15 @@ class MemV4:
                             cfg[k] = v
         except Exception as e:
             logger.error(f"memory: 读配置失败 {e}")
-        cfg["page_turns"] = _clamp_int(cfg.get("page_turns"), 20, 0, 100)
-        cfg["book_pages"] = _clamp_int(cfg.get("book_pages"), 3, 3, 5)
+        cfg["page_turns"] = _clamp_int(cfg.get("page_turns"), 20, 10, 50)
+        cfg["book_pages"] = 3
         caps = cfg.setdefault("max_items", {})
-        caps["hour"] = _clamp_int(caps.get("hour"), 20, 1, 20)
-        caps["day"] = _clamp_int(caps.get("day"), 50, 1, 50)
+        caps["hour"] = 20
+        caps["day"] = 30
         caps.pop("profile", None)
         inj = cfg.setdefault("inject", {})
         inj["hour_items"] = min(caps["hour"], _clamp_int(inj.get("hour_items"), 20, 1, 20))
-        inj["day_items"] = min(caps["day"], _clamp_int(inj.get("day_items"), 30, 1, 50))
+        inj["day_items"] = min(caps["day"], _clamp_int(inj.get("day_items"), 30, 1, 30))
         inj.pop("profile_items", None)
         cfg.pop("profile_cap", None)
         cfg.pop("profile_books", None)
@@ -761,23 +753,6 @@ class MemV4:
                 json.dump(d, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error(f"memory: 写配置失败 {e}")
-
-    def _save_cfg_max(self, tier: str, value: int) -> None:
-        p = os.path.join(_data_dir(), "memory_config.json")
-        try:
-            with open(p, "r", encoding="utf-8-sig") as f:
-                data = json.load(f)
-            if not isinstance(data, dict):
-                data = {}
-            caps = data.get("max_items")
-            if not isinstance(caps, dict):
-                caps = {}
-            caps[tier] = value
-            data["max_items"] = caps
-            with open(p, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.error(f"memory: 写容量配置失败 {e}")
 
     def _enabled(self) -> bool:
         return bool(self._cfg().get("enabled", True))
@@ -1270,7 +1245,7 @@ class MemV4:
         hp = _current_page(rec, "hour") or {}
         dp = _current_page(rec, "day") or {}
         cap_h = int(cfg["max_items"].get("hour", 20))
-        cap_d = int(cfg["max_items"].get("day", 50))
+        cap_d = int(cfg["max_items"].get("day", 30))
         n = int(cfg["page_turns"])
         turns = int(rec["hour"].get("turns_in_file") or 0)
         done_h = int(rec["hour"].get("pages_done") or 0)
@@ -1290,8 +1265,6 @@ class MemV4:
             f"存 {_storage_name(umo)}.json"
             f"｜待整理 私聊 {src_priv} 轮 / 群 {src_grp} 轮",
         ]
-        if n == 0:
-            lines.append("（page 0 = 不自动分页，只在 /mem gen 时整理）")
         if dp.get("items") is None:
             lines.append("")
         if with_help:
@@ -1300,8 +1273,7 @@ class MemV4:
                 "/mem on|off        开关收集与注入（保留已有记忆）",
                 "/mem show          看现在会带进去的记忆",
                 "/mem clear         清掉当前私聊或群聊的页/本",
-                "/mem page 0-100    每页多少轮（默认 20）",
-                "/mem book 3-5      几次页整理进入本（默认 3）",
+                "/mem page 10-50    每页多少轮（默认 20）",
                 "/mem gen           立刻用当前分片整理一次",
             ]
         return "\n".join(lines)
@@ -1325,81 +1297,24 @@ class MemV4:
             )
             return
 
-        if arg.startswith("pagecap"):
-            part = arg[7:].strip()
-            if not part:
-                yield event.plain_result(
-                    f"页上限 {cfg['max_items']['hour']} 条\n用法：/mem pagecap 1-20"
-                )
-                return
-            try:
-                n = int(part)
-            except ValueError:
-                yield event.plain_result("用法：/mem pagecap 1-20")
-                return
-            if n < 1 or n > 20:
-                yield event.plain_result("页上限只能填 1-20")
-                return
-            self._save_cfg_max("hour", n)
-            yield event.plain_result(f"✅ 页上限已设为 {n} 条")
-            return
-
-        if arg.startswith("bookcap"):
-            part = arg[7:].strip()
-            if not part:
-                yield event.plain_result(
-                    f"本上限 {cfg['max_items']['day']} 条\n用法：/mem bookcap 1-50"
-                )
-                return
-            try:
-                n = int(part)
-            except ValueError:
-                yield event.plain_result("用法：/mem bookcap 1-50")
-                return
-            if n < 1 or n > 50:
-                yield event.plain_result("本上限只能填 1-50")
-                return
-            self._save_cfg_max("day", n)
-            yield event.plain_result(f"✅ 本上限已设为 {n} 条")
-            return
-
         if arg.startswith("page"):
             part = arg[4:].strip()
             if not part:
                 yield event.plain_result(
-                    f"每页 {cfg['page_turns']} 轮（1 轮 = 1 问 1 答）\n用法：/mem page 0-100（0=不自动分页）"
+                    f"每页 {cfg['page_turns']} 轮（1 轮 = 1 问 1 答）\n"
+                    "用法：/mem page 10-50（默认 20）"
                 )
                 return
             try:
                 n = int(part)
             except ValueError:
-                yield event.plain_result("用法：/mem page 0-100")
+                yield event.plain_result("用法：/mem page 10-50")
                 return
-            if n < 0 or n > 100:
-                yield event.plain_result("只能填 0-100")
+            if n < 10 or n > 50:
+                yield event.plain_result("只能填 10-50")
                 return
             self._save_cfg_value("page_turns", n)
-            extra = "（关闭自动分页）" if n == 0 else ""
-            yield event.plain_result(f"✅ 每页已设为 {n} 轮{extra}\n下个分片开始生效，当前分片不受影响")
-            return
-
-        if arg.startswith("book"):
-            part = arg[4:].strip()
-            if not part:
-                yield event.plain_result(
-                    f"每 {cfg['book_pages']} 次页整理进入本\n用法：/mem book 3-5"
-                )
-                return
-            try:
-                n = int(part)
-            except ValueError:
-                yield event.plain_result("用法：/mem book 3-5")
-                return
-            if n < 3 or n > 5:
-                yield event.plain_result("只能填 3-5")
-                return
-            self._save_cfg_value("book_pages", n)
-            yield event.plain_result(f"✅ 已设为每 {n} 次页整理进入本")
+            yield event.plain_result(f"✅ 每页已设为 {n} 轮\n下个分片开始生效，当前分片不受影响")
             return
 
         if arg.startswith("gen"):
@@ -1449,6 +1364,5 @@ class MemV4:
             return
 
         yield event.plain_result(
-            "可用：/mem、on|off、show、clear、page 0-100、book 3-5、"
-            "pagecap 1-20、bookcap 1-50、gen"
+            "可用：/mem、on|off、show、clear、page 10-50、gen"
         )
