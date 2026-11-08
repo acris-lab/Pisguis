@@ -80,15 +80,20 @@ class GroupReply:
         self.config = config or {}
         self._focus: dict[str, float] = {}  # "umo|qq" -> 过期时间戳
         _init_data()
-        self._remove_cmd_list()
+        self._write_cmd_list()
 
-    def _remove_cmd_list(self) -> None:
+    def _write_cmd_list(self) -> None:
         try:
-            path = _common_data("cmd_list", "group_reply.txt")
-            if os.path.exists(path):
-                os.remove(path)
-        except Exception:
-            pass
+            d = _common_data("cmd_list")
+            os.makedirs(d, exist_ok=True)
+            lines = [
+                "/group                群聊接话状态",
+                "/group on|off         开关自动接话",
+            ]
+            with open(os.path.join(d, "group_reply.txt"), "w", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+        except Exception as e:
+            logger.error(f"group_reply: 写命令清单失败 {e}")
 
     # ---------- 配置 ----------
     def _read_cfg(self) -> dict:
@@ -126,6 +131,11 @@ class GroupReply:
 
     def _set_focus(self, umo: str, uid: str, secs: float) -> None:
         self._focus[self._key(umo, uid)] = time.time() + secs
+
+    def _save_enabled(self, enabled: bool) -> None:
+        cfg = self._cfg()
+        cfg["enabled"] = enabled
+        _write_json(_data(CFG_NAME), cfg)
 
     # ---------- 是不是在叫我 ----------
     def _addressed(self, event: AstrMessageEvent) -> bool:
@@ -183,3 +193,28 @@ class GroupReply:
             event.stop_event()
         except Exception:
             pass
+
+    async def group_cmd(self, event: AstrMessageEvent):
+        cfg = self._cfg()
+        text = (event.message_str or "").strip()
+        arg = ""
+        for prefix in ("/group", "group"):
+            if text.lower().startswith(prefix):
+                arg = text[len(prefix) :].strip().lower()
+                break
+
+        if arg in ("on", "off", "开", "关"):
+            enabled = arg in ("on", "开")
+            self._save_enabled(enabled)
+            yield event.plain_result(
+                "✅ 群聊接话已开启" if enabled else "已关闭群聊接话"
+            )
+            return
+
+        enabled = bool(cfg.get("enabled", True))
+        yield event.plain_result(
+            f"群聊接话：{'开' if enabled else '关'}\n"
+            f"基础概率：{float(cfg.get('probability', 0.5)):.2f}\n"
+            f"热点持续：{float(cfg.get('window_seconds', 30)):.0f} 秒\n"
+            "用法：/group on|off"
+        )

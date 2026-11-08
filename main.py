@@ -94,6 +94,11 @@ class PisguisPlugin(Star):
         async for result in self.access.guard_cmd(event):
             yield result
 
+    @filter.command("group", alias={"/group"})
+    async def group_cmd(self, event: AstrMessageEvent):
+        async for result in self.group_reply.group_cmd(event):
+            yield result
+
     @filter.command("style", alias={"/style"})
     async def style_cmd(self, event: AstrMessageEvent):
         async for result in self.style.style_cmd(event):

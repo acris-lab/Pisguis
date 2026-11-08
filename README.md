@@ -4,7 +4,7 @@ Pisguis 是面向 AstrBot 4.29.x 的单插件聊天增强包，集中提供命�
 
 ## 安装
 
-在 AstrBot WebUI 中从 GitHub 仓库安装：
+仓库根目录就是完整的单插件，可直接在 AstrBot WebUI 中通过 GitHub 仓库一键安装或更新：
 
 ```text
 https://github.com/acris-lab/Pisguis
@@ -35,6 +35,7 @@ data/plugin_data/astrbot_plugin_pisguis/
 
 ```text
 /guard
+/guard on|off
 /guard add <QQ>
 /guard remove <QQ>
 /guard list
@@ -43,6 +44,7 @@ data/plugin_data/astrbot_plugin_pisguis/
 ## 命令
 
 ```text
+# common：始终开启
 /config
 /config mode [名字]
 /config ctx 2-32
@@ -50,10 +52,22 @@ data/plugin_data/astrbot_plugin_pisguis/
 /prompt
 /cmd
 
+# guard：权限、工具限制和会话身份
+/guard
+/guard on|off
+
+# group：群聊自动接话
+/group
+/group on|off
+
+# style：清洗、分段和拟人延迟
 /style
+/style on|off
 /style delay 0-10
 
+# mem：群聊/私聊两层记忆
 /mem
+/mem on|off
 /mem show
 /mem clear
 /mem page 0-100
@@ -62,6 +76,8 @@ data/plugin_data/astrbot_plugin_pisguis/
 /mem bookcap 1-50
 /mem gen
 ```
+
+`guard`、`group`、`style`、`mem` 的开关立即生效并保存到各自的 `plugin_data` 配置文件，重启后保持。关闭 `mem` 只会停止新消息收集、整理和注入，已有记忆不会删除。`common` 不提供关闭命令，避免 `/config`、`/prompt` 和 `/cmd` 一并失效。
 
 只有半角 `/` 开头的命令会进入权限检查。未知命令、无权限命令和纯字符串命令都按普通聊天处理。
 

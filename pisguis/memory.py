@@ -691,6 +691,7 @@ class MemV4:
             os.makedirs(d, exist_ok=True)
             lines = [
                 "/mem                记忆状态（页/本、待整理轮数）",
+                "/mem on|off         开关记忆收集与注入",
                 "/mem show           看会注入的记忆",
                 "/mem clear          清空当前私聊/群聊记忆",
                 "/mem page 0-100     多少轮触发一次整理",
@@ -779,8 +780,7 @@ class MemV4:
             logger.error(f"memory: 写容量配置失败 {e}")
 
     def _enabled(self) -> bool:
-        """用了这个插件就是常开，没有开关。"""
-        return True
+        return bool(self._cfg().get("enabled", True))
 
     def _lock(self, umo: str) -> asyncio.Lock:
         lk = self._locks.get(umo)
@@ -1278,7 +1278,7 @@ class MemV4:
         src_priv = sum(1 for t in cur if str(t.get("src") or "private") == "private")
         src_grp = len(cur) - src_priv
         lines = [
-            "🧠 记忆（常开）",
+            f"🧠 记忆：{'开' if cfg.get('enabled', True) else '关'}",
             "────────────────────────",
             f"{_pad('页', 4)}{len(hp.get('items', []))} / {cap_h} 条"
             f"   待整理 {turns} / {n if n else '∞'} 轮",
@@ -1297,6 +1297,7 @@ class MemV4:
         if with_help:
             lines += [
                 "────────────────────────",
+                "/mem on|off        开关收集与注入（保留已有记忆）",
                 "/mem show          看现在会带进去的记忆",
                 "/mem clear         清掉当前私聊或群聊的页/本",
                 "/mem page 0-100    每页多少轮（默认 20）",
@@ -1315,7 +1316,13 @@ class MemV4:
             return
 
         if arg in ("on", "off", "enable", "disable", "开", "关"):
-            yield event.plain_result("记忆插件是常开的，没有开关。要清空就 /mem clear。")
+            enabled = arg in ("on", "enable", "开")
+            self._save_cfg_value("enabled", enabled)
+            yield event.plain_result(
+                "✅ 记忆已开启"
+                if enabled
+                else "已关闭记忆：停止收集、整理和注入，已有记忆保留"
+            )
             return
 
         if arg.startswith("pagecap"):
@@ -1442,5 +1449,6 @@ class MemV4:
             return
 
         yield event.plain_result(
-            "可用：/mem、show、clear、page 0-100、book 3-5、pagecap 1-20、bookcap 1-50、gen"
+            "可用：/mem、on|off、show、clear、page 0-100、book 3-5、"
+            "pagecap 1-20、bookcap 1-50、gen"
         )

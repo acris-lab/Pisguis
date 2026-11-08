@@ -26,6 +26,7 @@ from .paths import astrbot_data_root, data_path
 
 CFG_NAME = "access_config.json"
 DEFAULT_CFG = {
+    "enabled": True,
     "owner_ids": [],
     "admin_ids": [],
     "filter_commands": True,
@@ -267,6 +268,7 @@ class Access:
             os.makedirs(d, exist_ok=True)
             lines = [
                 "/guard                权限状态",
+                "/guard on|off         开关鉴权与工具限制",
                 "/guard add <QQ>       添加二级管理员",
                 "/guard remove <QQ>    移除二级管理员",
                 "/guard list           查看主人和管理员",
@@ -301,9 +303,9 @@ class Access:
         无斜杠命令使用 WakingCheck 已激活的 CommandFilter 识别。
         """
         cfg = _cfg()
-        if not cfg.get("filter_commands", True):
-            return
         cfg = await self._claim_owner(event, cfg)
+        if not cfg.get("enabled", True) or not cfg.get("filter_commands", True):
+            return
 
         logger.info(f"guard: probe message_str={(event.message_str or '')!r}")
         text = _text(event)
@@ -346,6 +348,8 @@ class Access:
         if req is None:
             return
         cfg = _cfg()
+        if not cfg.get("enabled", True):
+            return
         role = _role(event.get_sender_id(), cfg)
 
         if role != "owner":
@@ -397,10 +401,24 @@ class Access:
         sub = parts[0].lower() if parts else ""
         target = parts[1].strip() if len(parts) > 1 else ""
 
+        if sub in ("on", "off", "开", "关"):
+            enabled = sub in ("on", "开")
+            cfg["enabled"] = enabled
+            if enabled:
+                cfg["filter_commands"] = True
+            _save_cfg(cfg)
+            yield event.plain_result(
+                "✅ guard 已开启：恢复命令鉴权和工具限制"
+                if enabled
+                else "已关闭 guard：命令鉴权和工具限制停止生效"
+            )
+            return
+
         if not sub or sub in ("status", "list"):
             owners = "、".join(cfg.get("owner_ids") or []) or "未设置"
             admins = "、".join(cfg.get("admin_ids") or []) or "无"
             yield event.plain_result(
+                f"guard：{'开' if cfg.get('enabled', True) else '关'}\n"
                 f"主人：{owners}\n"
                 f"二级管理员：{admins}\n"
                 "二级管理员可以调用除 /guard 外的命令和工具"
@@ -432,5 +450,6 @@ class Access:
             return
 
         yield event.plain_result(
-            "用法：/guard、/guard add <QQ>、/guard remove <QQ>、/guard list"
+            "用法：/guard、/guard on|off、/guard add <QQ>、"
+            "/guard remove <QQ>、/guard list"
         )

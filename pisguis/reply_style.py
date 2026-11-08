@@ -151,6 +151,7 @@ class ChatStyle:
             os.makedirs(d, exist_ok=True)
             lines = [
                 "/style                发送节奏状态",
+                "/style on|off         开关清洗、分段与延迟",
                 "/style delay 0-10     档位（0=秒发，5=默认）",
             ]
             with open(os.path.join(d, "reply_style.txt"), "w", encoding="utf-8") as f:
@@ -381,6 +382,8 @@ class ChatStyle:
     async def handle_result(self, event: AstrMessageEvent):
         try:
             cfg = self._cfg()
+            if not cfg.get("enabled", True):
+                return
             if (event.message_str or "").strip().startswith("/"):
                 return
             if event.get_extra("handlers_parsed_params", {}) or event.get_extra("parsed_params", None):
@@ -462,14 +465,16 @@ class ChatStyle:
     def _help(self) -> str:
         cfg = self._cfg()
         return (
-            "🎚 发送节奏\\n"
-            "────────────────────────\\n"
-            f"{_pad('档位', 8)}{self._delay_level()}（0=秒发，5=默认，10=最慢）\\n"
-            f"{_pad('首条', 8)}正态 μ={cfg.get('mean')} σ={cfg.get('sigma')}\\n"
-            f"{_pad('每字', 8)}{cfg.get('per_char_seconds')} 秒\\n"
-            f"{_pad('分段地板', 8)}{self._floor()} 秒｜单条上限 {cfg.get('max_total')} 秒\\n"
-            f"{_pad('分段', 8)}{cfg.get('split')}｜清洗 {'开' if cfg.get('clean', True) else '关'}\\n"
-            "────────────────────────\\n"
+            "🎚 发送节奏\n"
+            "────────────────────────\n"
+            f"{_pad('开关', 8)}{'开' if cfg.get('enabled', True) else '关'}\n"
+            f"{_pad('档位', 8)}{self._delay_level()}（0=秒发，5=默认，10=最慢）\n"
+            f"{_pad('首条', 8)}正态 μ={cfg.get('mean')} σ={cfg.get('sigma')}\n"
+            f"{_pad('每字', 8)}{cfg.get('per_char_seconds')} 秒\n"
+            f"{_pad('分段地板', 8)}{self._floor()} 秒｜单条上限 {cfg.get('max_total')} 秒\n"
+            f"{_pad('分段', 8)}{cfg.get('split')}｜清洗 {'开' if cfg.get('clean', True) else '关'}\n"
+            "────────────────────────\n"
+            "/style on|off            模块开关\n"
             "/style delay 0-10          档位"
         )
     async def style_cmd(self, event: AstrMessageEvent):
@@ -481,6 +486,14 @@ class ChatStyle:
         parts = arg.split(maxsplit=1)
         sub = parts[0].lower()
         rest = parts[1].strip() if len(parts) > 1 else ""
+
+        if sub in ("on", "off", "开", "关"):
+            enabled = sub in ("on", "开")
+            _write_json(_data(CFG_NAME), {**cfg, "enabled": enabled})
+            yield event.plain_result(
+                "✅ 回复样式已开启" if enabled else "已关闭回复样式：回复将原样发送"
+            )
+            return
 
         if sub == "delay":
             if not rest:
@@ -579,4 +592,4 @@ class ChatStyle:
             yield event.plain_result(f"✅ 文本清洗：{'开' if on else '关'}")
             return
 
-        yield event.plain_result("可用：/style、/style delay 0-10")
+        yield event.plain_result("可用：/style、/style on|off、/style delay 0-10")
