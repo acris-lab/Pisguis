@@ -31,19 +31,26 @@ except Exception:  # pragma: no cover
 
 from .paths import astrbot_data_root, data_path
 
+# 档位 -> (每页轮数/当前页上限, 翻过的页注入上限)
+MEMORY_LEVELS = {
+    1: (10, 5),
+    2: (15, 7),
+    3: (20, 10),
+    4: (25, 12),
+    5: (30, 15),
+}
+DEFAULT_MEMORY_LEVEL = 3
+BOOK_CAP = 30
+BOOK_PAGES = 3
+
 # ---------------- 配置 ----------------
 DEFAULT_CFG = {
-    "config_version": 3,
+    "config_version": 4,
     "enabled": True,
     "group_memory": True,
-    # 每页多少轮（1 轮 = 1 问 1 答）；0 = 关掉自动分页，只在 /mem gen 时整理
-    "page_turns": 20,
-    "book_pages": 3,          # 固定 3 次页整理 → 一次本整理
+    "memory_level": DEFAULT_MEMORY_LEVEL,
     "idle_seconds": 1800,     # 空闲兜底：这么久没新消息
     "idle_min_turns": 10,     # 且攒了这么多轮 → 提前整理
-    "keep_pages": 2,          # 页/本各留 2 格（当前 + 冻结）
-    # 群聊按群独立记录；私聊按用户独立记录
-    "max_items": {"hour": 20, "day": 30},
     # importance 名额：None=不限，数字=该档最多几条；没列出的档位只当补位
     "importance_quota": {
         "hour": {"5": None, "4": 12, "3": 8},
@@ -51,10 +58,6 @@ DEFAULT_CFG = {
     },
     # 本只收 importance ≥ 这个值的条目
     "min_importance": {"day": 3},
-    "inject": {
-        "hour_items": 20, "day_items": 30,
-        "hour_frozen_items": 10, "day_frozen_items": 10,
-    },
 }
 
 TIER_CN = {"hour": "页（最近一段记忆）", "day": "本（小本本）"}
@@ -280,7 +283,7 @@ def _init_data() -> None:
 
 
 def _normalize_config_file(path: str) -> None:
-    """把旧三层配置就地升级为两层配置。"""
+    """升级为单记忆档位配置，派生值只在运行时计算。"""
     try:
         with open(path, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
@@ -288,28 +291,25 @@ def _normalize_config_file(path: str) -> None:
         data = {}
     if not isinstance(data, dict):
         data = {}
-    old_version = _clamp_int(data.get("config_version"), 1, 1, 3)
-    data.setdefault("enabled", True)
-    data.setdefault("group_memory", True)
-    data.setdefault("page_turns", 20)
-    data["book_pages"] = 3
-    data["keep_pages"] = 2
-    if old_version < 2:
-        data["max_items"] = {"hour": 20, "day": 30}
-        data["importance_quota"] = copy.deepcopy(DEFAULT_CFG["importance_quota"])
-        data["min_importance"] = copy.deepcopy(DEFAULT_CFG["min_importance"])
-        data["inject"] = copy.deepcopy(DEFAULT_CFG["inject"])
+
+    old_level = _clamp_int(data.get("memory_level"), 0, 0, 5)
+    if 1 <= old_level <= 5:
+        level = old_level
     else:
-        data["max_items"] = {"hour": 20, "day": 30}
-        data.setdefault("importance_quota", copy.deepcopy(DEFAULT_CFG["importance_quota"]))
-        data.setdefault("min_importance", copy.deepcopy(DEFAULT_CFG["min_importance"]))
-        data.setdefault("inject", copy.deepcopy(DEFAULT_CFG["inject"]))
-    data["config_version"] = 3
-    data.pop("profile_books", None)
-    data.pop("profile_cap", None)
+        old_turns = _clamp_int(data.get("page_turns"), 20, 10, 50)
+        level = min(MEMORY_LEVELS, key=lambda n: abs(MEMORY_LEVELS[n][0] - old_turns))
+
+    normalized = {
+        "config_version": 4,
+        "enabled": bool(data.get("enabled", True)),
+        "group_memory": bool(data.get("group_memory", True)),
+        "memory_level": level,
+        "idle_seconds": _clamp_int(data.get("idle_seconds"), 1800, 300, 86400),
+        "idle_min_turns": _clamp_int(data.get("idle_min_turns"), 10, 1, 100),
+    }
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        json.dump(normalized, f, ensure_ascii=False, indent=2)
     os.replace(tmp, path)
 
 
@@ -634,9 +634,15 @@ def _ensure_page(rec: dict, tier: str) -> dict:
     return page
 
 
-def _freeze_page(rec: dict, tier: str) -> None:
+def _freeze_page(rec: dict, tier: str, item_limit: int | None = None) -> None:
     pages = rec[tier]["pages"]
     if pages and pages[-1].get("state") == "mutable":
+        if item_limit is not None:
+            items = pages[-1].get("items") or []
+            pages[-1]["items"] = sorted(
+                items,
+                key=lambda item: -int(item.get("importance") or 3),
+            )[: max(0, item_limit)]
         pages[-1]["state"] = "frozen"
         pages[-1]["frozen_at"] = time.time()
 
@@ -689,7 +695,7 @@ class MemV4:
                 "/mem on|off         开关记忆收集与注入",
                 "/mem show           看会注入的记忆",
                 "/mem clear          清空当前私聊/群聊记忆",
-                "/mem page 10-50     多少轮触发一次整理",
+                "/mem level 1-5      记忆挡位（默认 3）",
                 "/mem gen            立刻整理待整理的对话",
             ]
             with open(os.path.join(d, "memory.txt"), "w", encoding="utf-8") as f:
@@ -718,25 +724,28 @@ class MemV4:
                 with open(p, "r", encoding="utf-8-sig") as f:
                     d = json.load(f)
                 if isinstance(d, dict):
-                    for k, v in d.items():
-                        if k in ("max_items", "inject") and isinstance(v, dict):
-                            cfg[k] = {**cfg[k], **v}
-                        elif k in cfg:
-                            cfg[k] = v
+                    for key in (
+                        "enabled",
+                        "group_memory",
+                        "memory_level",
+                        "idle_seconds",
+                        "idle_min_turns",
+                    ):
+                        if key in d:
+                            cfg[key] = d[key]
         except Exception as e:
             logger.error(f"memory: 读配置失败 {e}")
-        cfg["page_turns"] = _clamp_int(cfg.get("page_turns"), 20, 10, 50)
-        cfg["book_pages"] = 3
-        caps = cfg.setdefault("max_items", {})
-        caps["hour"] = 20
-        caps["day"] = 30
-        caps.pop("profile", None)
-        inj = cfg.setdefault("inject", {})
-        inj["hour_items"] = min(caps["hour"], _clamp_int(inj.get("hour_items"), 20, 1, 20))
-        inj["day_items"] = min(caps["day"], _clamp_int(inj.get("day_items"), 30, 1, 30))
-        inj.pop("profile_items", None)
-        cfg.pop("profile_cap", None)
-        cfg.pop("profile_books", None)
+
+        level = _clamp_int(cfg.get("memory_level"), DEFAULT_MEMORY_LEVEL, 1, 5)
+        page_cap, frozen_items = MEMORY_LEVELS[level]
+        cfg["enabled"] = bool(cfg.get("enabled", True))
+        cfg["group_memory"] = bool(cfg.get("group_memory", True))
+        cfg["memory_level"] = level
+        cfg["page_turns"] = page_cap
+        cfg["book_pages"] = BOOK_PAGES
+        cfg["keep_pages"] = 2
+        cfg["max_items"] = {"hour": page_cap, "day": BOOK_CAP}
+        cfg["inject"] = {"frozen_items": frozen_items, "day_items": BOOK_CAP}
         return cfg
 
     def _save_cfg_value(self, key: str, value) -> None:
@@ -1053,12 +1062,9 @@ class MemV4:
         raw = _turns_to_text(turns)
         rec = self.store.umo(key)
         page = _ensure_page(rec, "hour")
-        prev = _frozen_page(rec, "hour")
-        prev_txt = _render_items(prev.get("items", [])) if prev else ""
         prompt = (
             f"【这一页现在的内容】\n{_render_items(page.get('items', []))}\n\n"
-            + (f"【上一页（已冻结，只读参考，不要改动它）】\n{prev_txt}\n\n" if prev_txt else "")
-            + f"【素材：这 {len(turns)} 轮原话】\n{raw}"
+            f"【素材：这 {len(turns)} 轮原话】\n{raw}"
         )
         text = await self._llm(key, "hour", prompt, _day_label(turns[-1].get("ts")))
         items = self._parse_items(text)
@@ -1116,7 +1122,7 @@ class MemV4:
             self._min_imp(cfg, "day"),
         )
         book["state"] = "mutable"
-        _freeze_page(rec, "hour")
+        _freeze_page(rec, "hour", int(cfg["inject"].get("frozen_items", 10)))
         _ensure_page(rec, "hour")
         _prune_pages(rec, "hour", int(cfg.get("keep_pages", 2)))
         rec["day"]["last_at"] = time.time()
@@ -1168,33 +1174,25 @@ class MemV4:
         return ordered[: max(0, n)]
 
     def _visible(self, rec: dict, cfg: dict) -> dict:
-        """当前页/本有内容就用当前的；空了（刚整理完）才拿冻结的填这个空窗。"""
+        """只注入最近翻过的页和本，当前页仅用于整理。"""
         inj = cfg["inject"]
-        hp, hf = _current_page(rec, "hour"), _frozen_page(rec, "hour")
+        hf = _frozen_page(rec, "hour")
         dp, df = _current_page(rec, "day"), _frozen_page(rec, "day")
-        hour = self._top((hp or {}).get("items", []), int(inj.get("hour_items", 25)))
-        hour_from_frozen = False
-        if not hour:
-            hour = self._top((hf or {}).get("items", []), int(inj.get("hour_frozen_items", 10)))
-            hour_from_frozen = bool(hour)
+        hour = self._top(
+            (hf or {}).get("items", []),
+            int(inj.get("frozen_items", 10)),
+        )
         day = self._top((dp or {}).get("items", []), int(inj.get("day_items", 15)))
-        day_from_frozen = False
         if not day:
-            day = self._top((df or {}).get("items", []), int(inj.get("day_frozen_items", 10)))
-            day_from_frozen = bool(day)
-        return {
-            "hour": hour,
-            "day": day,
-            "frozen": {"hour": hour_from_frozen, "day": day_from_frozen},
-        }
+            day = self._top((df or {}).get("items", []), BOOK_CAP)
+        return {"hour": hour, "day": day}
 
     def _memory_block(self, rec: dict, cfg: dict) -> str:
         v = self._visible(rec, cfg)
-        frozen = v.get("frozen") or {}
         parts = []
         keys = (
-            ("hour", "上一段（刚整理完，暂时用这个填着）" if frozen.get("hour") else "最近一段"),
-            ("day", "上一本（刚整理完，暂时用这个填着）" if frozen.get("day") else "小本本"),
+            ("hour", "翻过的页（近期）"),
+            ("day", "本（长期）"),
         )
         for key, label in keys:
             items = v.get(key) or []
@@ -1243,10 +1241,13 @@ class MemV4:
         umo = self._key(event, cfg) or str(event.unified_msg_origin)
         rec = self.store.umo(umo)
         hp = _current_page(rec, "hour") or {}
+        hf = _frozen_page(rec, "hour") or {}
         dp = _current_page(rec, "day") or {}
         cap_h = int(cfg["max_items"].get("hour", 20))
         cap_d = int(cfg["max_items"].get("day", 30))
+        cap_f = int(cfg["inject"].get("frozen_items", 10))
         n = int(cfg["page_turns"])
+        level = int(cfg["memory_level"])
         turns = int(rec["hour"].get("turns_in_file") or 0)
         done_h = int(rec["hour"].get("pages_done") or 0)
         cur = _turns_list(umo)
@@ -1255,13 +1256,15 @@ class MemV4:
         lines = [
             f"🧠 记忆：{'开' if cfg.get('enabled', True) else '关'}",
             "────────────────────────",
-            f"{_pad('页', 4)}{len(hp.get('items', []))} / {cap_h} 条"
-            f"   待整理 {turns} / {n if n else '∞'} 轮",
+            f"{_pad('档位', 4)}{level}（每页 {n} 轮）",
+            f"{_pad('当前页', 6)}{len(hp.get('items', []))} / {cap_h} 条"
+            f"   待整理 {turns} / {n} 轮",
             f"{_pad('本', 4)}{len(dp.get('items', []))} / {cap_d} 条"
             f"   {done_h} / {int(cfg.get('book_pages', 3))} 页 → 换本",
             "────────────────────────",
-            f"冻结 页 {len((_frozen_page(rec,'hour') or {}).get('items', []))} 条"
-            f" / 本 {len((_frozen_page(rec,'day') or {}).get('items', []))} 条（也注入）",
+            f"注入 {_pad('翻过的页', 8)}"
+            f"{min(len(hf.get('items', [])), cap_f)} / {cap_f} 条",
+            f"注入 {_pad('本', 8)}{min(len(dp.get('items', [])), cap_d)} / {cap_d} 条",
             f"存 {_storage_name(umo)}.json"
             f"｜待整理 私聊 {src_priv} 轮 / 群 {src_grp} 轮",
         ]
@@ -1273,7 +1276,7 @@ class MemV4:
                 "/mem on|off        开关收集与注入（保留已有记忆）",
                 "/mem show          看现在会带进去的记忆",
                 "/mem clear         清掉当前私聊或群聊的页/本",
-                "/mem page 10-50    每页多少轮（默认 20）",
+                "/mem level 1-5     记忆挡位（默认 3）",
                 "/mem gen           立刻用当前分片整理一次",
             ]
         return "\n".join(lines)
@@ -1297,24 +1300,32 @@ class MemV4:
             )
             return
 
-        if arg.startswith("page"):
-            part = arg[4:].strip()
+        if arg.startswith("level"):
+            part = arg[5:].strip()
             if not part:
+                level = int(cfg["memory_level"])
+                page_cap, frozen_items = MEMORY_LEVELS[level]
                 yield event.plain_result(
-                    f"每页 {cfg['page_turns']} 轮（1 轮 = 1 问 1 答）\n"
-                    "用法：/mem page 10-50（默认 20）"
+                    f"当前 {level} 档：每页 {page_cap} 轮，"
+                    f"注入翻过的页 {frozen_items} 条、本 {BOOK_CAP} 条\n"
+                    "用法：/mem level 1-5"
                 )
                 return
             try:
-                n = int(part)
+                level = int(part)
             except ValueError:
-                yield event.plain_result("用法：/mem page 10-50")
+                yield event.plain_result("用法：/mem level 1-5")
                 return
-            if n < 10 or n > 50:
-                yield event.plain_result("只能填 10-50")
+            if level < 1 or level > 5:
+                yield event.plain_result("挡位只能是 1-5")
                 return
-            self._save_cfg_value("page_turns", n)
-            yield event.plain_result(f"✅ 每页已设为 {n} 轮\n下个分片开始生效，当前分片不受影响")
+            self._save_cfg_value("memory_level", level)
+            page_cap, frozen_items = MEMORY_LEVELS[level]
+            yield event.plain_result(
+                f"✅ 已切换到 {level} 档\n"
+                f"每页 {page_cap} 轮，当前页上限 {page_cap} 条，"
+                f"翻过的页注入 {frozen_items} 条，本 {BOOK_CAP} 条"
+            )
             return
 
         if arg.startswith("gen"):
@@ -1337,14 +1348,10 @@ class MemV4:
 
         if arg == "show":
             v = self._visible(self.store.umo(umo), cfg)
-            frozen = v.get("frozen") or {}
             lines = ["🧠 现在会带进聊天的记忆", "────────────────────────"]
-            for k, base in (("hour", "页"), ("day", "本")):
-                label = base
-                if k in frozen and frozen.get(k):
-                    label = base + "（空窗，用刚冻结的填）"
+            for k, base in (("hour", "翻过的页"), ("day", "本")):
                 items = v.get(k, [])
-                lines.append(f"【{label}】{len(items)} 条")
+                lines.append(f"【{base}】{len(items)} 条")
                 lines += [f"  · {i.get('content')}" for i in items] or ["  （空）"]
                 lines.append("")
             total = sum(len(v.get(k, [])) for k in ("hour", "day"))
@@ -1364,5 +1371,5 @@ class MemV4:
             return
 
         yield event.plain_result(
-            "可用：/mem、on|off、show、clear、page 10-50、gen"
+            "可用：/mem、on|off、show、clear、level 1-5、gen"
         )
