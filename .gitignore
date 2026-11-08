@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.bak-*
+install_state.json
+session-*.json
+data/
+logs/

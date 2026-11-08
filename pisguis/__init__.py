@@ -1,0 +1,1 @@
+"""Pisguis single-plugin modules."""
