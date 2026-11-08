@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from pathlib import Path
@@ -57,6 +58,56 @@ def data_path(*parts: str) -> str:
     return os.path.join(plugin_data_root(), PLUGIN_NAME, *parts)
 
 
+def _read_json(path: str):
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _memory_item_count(path: str) -> int:
+    data = _read_json(path)
+    if not isinstance(data, dict):
+        return 0
+    rec = data.get("rec") if isinstance(data.get("rec"), dict) else data
+    count = 0
+    for tier in ("hour", "day"):
+        pages = rec.get(tier, {}).get("pages", [])
+        if isinstance(pages, list):
+            count += sum(
+                len(page.get("items", []))
+                for page in pages
+                if isinstance(page, dict) and isinstance(page.get("items"), list)
+            )
+    return count
+
+
+def _merge_turns_file(src: str, dst: str) -> bool:
+    source = _read_json(src)
+    target = _read_json(dst)
+    if not isinstance(source, dict) or not isinstance(source.get("turns"), list):
+        return False
+    if not isinstance(target, dict) or not isinstance(target.get("turns"), list):
+        shutil.copy2(src, dst)
+        return True
+
+    seen = set()
+    merged = []
+    for turn in [*source["turns"], *target["turns"]]:
+        key = json.dumps(turn, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        if key not in seen:
+            seen.add(key)
+            merged.append(turn)
+    merged.sort(key=lambda turn: float(turn.get("ts") or 0))
+    target["turns"] = merged
+    tmp = dst + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(target, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, dst)
+    return True
+
+
 def _merge_tree(src: str, dst: str) -> None:
     if not os.path.isdir(src):
         return
@@ -69,9 +120,20 @@ def _merge_tree(src: str, dst: str) -> None:
         out_dir = dst if rel == "." else os.path.join(dst, rel)
         os.makedirs(out_dir, exist_ok=True)
         for name in files:
+            source = os.path.join(root, name)
             target = os.path.join(out_dir, name)
             if not os.path.exists(target):
-                shutil.copy2(os.path.join(root, name), target)
+                shutil.copy2(source, target)
+                continue
+
+            in_memory_archive = "mem_archive" in Path(root).parts
+            if in_memory_archive and name == "memory.json":
+                # A released installer could leave an empty skeleton that must not
+                # hide an older archive containing real page/book items.
+                if _memory_item_count(target) == 0 and _memory_item_count(source) > 0:
+                    shutil.copy2(source, target)
+            elif in_memory_archive and name.endswith(".json"):
+                _merge_turns_file(source, target)
 
 
 def migrate_legacy_data() -> None:
