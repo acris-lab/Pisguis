@@ -3,7 +3,7 @@
 职责（只做这三件事，不注册任何用户命令）：
 1 指令过滤：/ 开头的消息，只有主人放行；其他人 event.stop_event()，AI 完全看不见
 2 agent 闸门：非主人清空工具集，并明说"没有工具"
-3 会话身份：给每次请求追加 <scene> / <who> 两段，告诉模型现在是私聊还是群、对方是谁
+3 会话身份：给每次请求追加当前会话和对方身份，告诉模型现在是私聊还是群
 
 配置 data/plugin_data/astrbot_plugin_pisguis/access_config.json
 （明文 QQ，不哈希）。
@@ -244,8 +244,9 @@ def _scene(event: AstrMessageEvent, role: str) -> str:
     else:
         who = "陌生人（没有权限，只能闲聊）"
     return (
-        f"<scene>当前会话：{scene}</scene>\n"
-        f"<who>对方是：{who}；{speakers}</who>"
+        "【当前会话】\n"
+        f"{scene}。\n"
+        f"对方身份：{who}。{speakers}。"
     )
 
 

@@ -406,9 +406,6 @@ class ChatStyle:
                 res.chain = [] if action == "silent" else [Plain(random.choice(DEFLECT_LINES))]
                 return
 
-            if raw.lstrip().startswith(("/语音", "／语音")):
-                return
-
             text = self.clean(raw, umo) if cfg.get("clean", True) else raw.strip()
             if not text:
                 res.chain = []

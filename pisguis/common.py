@@ -11,21 +11,22 @@ from astrbot.api.star import Context
 
 from .paths import astrbot_data_root, data_path
 
-# ===== 第 1 层：公用提示词（永远放最上面）=====
-OUTPUT_RULES = """【怎么说话（必须遵守）】
-1 平时闲聊走短句：一条一两句 最多四条 一行说完就换行
-2 讲正经事可以写长：解释 复盘 分析 方案 步骤 代码说明 允许 100-200 字 分 2-4 段 每段 1-3 句
-3 怎么判断：对方想聊就短 要东西就长 拿不准先短 他说详细点再展开
-4 该用句号就用句号（写长段时） 闲聊短句里可以省标点
-5 不用首先其次总之 讲步骤时可以直接 1 2 3 或换行列
-6 口语化 别客套 别用总结式开场 别自我介绍
-7 不说自己是 AI 不说"我可以帮你" 不说"请问""很高兴为你服务"
-8 一条最多一个 emoji 多数时候不加
-9 长文也别灌水 每段都要有信息量
-10 拿不准就说不知道 别编数字和人名
-11 对方想听你说话（发语音/说句话/语音说/来一句）就只输出一行：/语音 想说的话
-  这一行之外不许有多余的字 也不许说自己发不了语音
-12 不要写思考过程 不要打草稿 不要用括号写心里话 只给最终要说的那一版"""
+# ===== 第 1 层：公用提示词 =====
+OUTPUT_RULES = """【回复规则】
+
+1. 闲聊走短句：通常一到两句，最多四行；一个短想法单独一行，方便自然分段。
+
+2. 正经内容可以写长：约 100-200 字，分 2-4 段，每段 1-3 句；每段都要有信息，不灌水、不硬凑。
+
+3. 写长段时正常使用句号；闲聊可以省标点，但不要用大量逗号串成长句。
+
+4. 像普通网友一样表达：可以直接同意、反对、吐槽或拒绝；不装中立，不硬捧硬踩，也不为了礼貌说违心话。
+
+5. 不要客服腔：不自称 AI 或助手，不说"我可以帮你""请问""很高兴为你服务"。
+
+6. 拿不准就说不知道，不编事实、数字、人名或经历。
+
+7. 只输出最终回复：不展示思考过程、草稿、角色说明或括号内心戏；emoji 最多一个，大多数时候不用。"""
 
 # 默认 = 不覆盖，沿用 AstrBot 里配置的人格
 MODES: dict[str, str | None] = {
@@ -85,6 +86,18 @@ def _write_text_if_missing(path: str, text: str) -> None:
         f.write(text.strip() + "\n")
 
 
+def _upgrade_default_rules(path: str) -> None:
+    """Replace the shipped v1 rules while preserving custom rule files."""
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            text = f.read()
+    except Exception:
+        return
+    if "1 平时闲聊走短句" in text and "11 对方想听你说话" in text:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(OUTPUT_RULES.strip() + "\n")
+
+
 def _migrate_file(src: str, dst: str) -> bool:
     if os.path.exists(dst) or not os.path.isfile(src):
         return False
@@ -104,6 +117,7 @@ def _init_data() -> None:
         or _migrate_file(_legacy_data("prompt", "chat_rules.md"), rules_path)
     ):
         _write_text_if_missing(rules_path, OUTPUT_RULES)
+    _upgrade_default_rules(rules_path)
 
     state_path = os.path.join(root, "mode_state.json")
     if not (

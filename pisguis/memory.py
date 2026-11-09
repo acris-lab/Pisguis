@@ -1191,17 +1191,16 @@ class MemV4:
         v = self._visible(rec, cfg)
         parts = []
         keys = (
-            ("hour", "翻过的页（近期）"),
-            ("day", "本（长期）"),
+            ("hour", "最近记住的"),
+            ("day", "长期记下的"),
         )
         for key, label in keys:
             items = v.get(key) or []
             if not items:
                 continue
             parts.append(
-                f"<{key}：{label}>\n"
+                f"【{label}】\n"
                 + "\n".join(f"- {i.get('content','')}" for i in items)
-                + f"\n</{key}>"
             )
         if not parts:
             return ""
